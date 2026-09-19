@@ -26,11 +26,14 @@ public sealed class Game : GameWindow
     private WorldRenderer _worldRenderer = null!;
     private SkyRenderer _skyRenderer = null!;
     private SelectionRenderer _selectionRenderer = null!;
+    private BlockParticles _particles = null!;
     private UIRenderer _uiRenderer = null!;
     private BitmapFont _font = null!;
     private Hud _hud = null!;
 
     private readonly int _autoScreenshotFrame;
+    private readonly bool _autoWalk;
+    private readonly bool _autoDig;
     private int _frameIndex;
 
     private int _hotbarIndex;
@@ -40,6 +43,7 @@ public sealed class Game : GameWindow
     private bool _advanceTime = true;
     private bool _showDebug = true;
     private bool _wireframe;
+    private bool _viewBobbing = true;
     private bool _mouseCaptured = true;
     private bool _spawnResolved;
     private int _mouseGraceFrames;
@@ -51,10 +55,17 @@ public sealed class Game : GameWindow
     /// <param name="autoScreenshotFrame">
     /// Debug helper: when &gt;= 0 the game saves a screenshot once that frame index is reached and exits.
     /// </param>
-    public Game(GameWindowSettings gameWindowSettings, NativeWindowSettings nativeWindowSettings, int autoScreenshotFrame = -1)
+    public Game(
+        GameWindowSettings gameWindowSettings,
+        NativeWindowSettings nativeWindowSettings,
+        int autoScreenshotFrame = -1,
+        bool autoWalk = false,
+        bool autoDig = false)
         : base(gameWindowSettings, nativeWindowSettings)
     {
         _autoScreenshotFrame = autoScreenshotFrame;
+        _autoWalk = autoWalk;
+        _autoDig = autoDig;
     }
 
     protected override void OnLoad()
@@ -77,13 +88,14 @@ public sealed class Game : GameWindow
         {
             Position = new Vector3(8.5f, 96f, 8.5f),
             Yaw = -32f,
-            Pitch = -12f,
+            Pitch = _autoDig ? -38f : -12f,
         };
         _player.UpdateLook();
 
         _worldRenderer = new WorldRenderer();
         _skyRenderer = new SkyRenderer();
         _selectionRenderer = new SelectionRenderer();
+        _particles = new BlockParticles();
         _uiRenderer = new UIRenderer();
         _font = new BitmapFont();
         _hud = new Hud(_uiRenderer, _font, _worldRenderer.Atlas);
@@ -104,6 +116,7 @@ public sealed class Game : GameWindow
     protected override void OnUnload()
     {
         _hud?.Dispose();
+        _particles?.Dispose();
         _selectionRenderer?.Dispose();
         _skyRenderer?.Dispose();
         _worldRenderer?.Dispose();
@@ -192,6 +205,8 @@ public sealed class Game : GameWindow
         PlayerInput playerInput = _mouseCaptured ? BuildPlayerInput() : default;
         _player.Update(_world, playerInput, deltaTime);
         _player.Move(_world, deltaTime);
+        _player.UpdateViewBobbing(_viewBobbing, deltaTime);
+        _particles.Update(_world, deltaTime);
 
         _world.Update(_player.EyePosition);
         ResolveSpawn();
@@ -238,6 +253,7 @@ public sealed class Game : GameWindow
     {
         PlayerInput input = default;
 
+        if (_autoWalk) input.Forward += 1f;
         if (_input.IsKeyDown(Keys.W)) input.Forward += 1f;
         if (_input.IsKeyDown(Keys.S)) input.Forward -= 1f;
         if (_input.IsKeyDown(Keys.D)) input.Strafe += 1f;
@@ -268,6 +284,12 @@ public sealed class Game : GameWindow
         {
             _wireframe = !_wireframe;
             ShowToast(_wireframe ? "线框模式: 开" : "线框模式: 关");
+        }
+
+        if (_input.WasKeyPressed(Keys.B))
+        {
+            _viewBobbing = !_viewBobbing;
+            ShowToast(_viewBobbing ? "视角摇晃: 开" : "视角摇晃: 关");
         }
 
         if (_input.WasKeyPressed(Keys.T))
@@ -324,12 +346,13 @@ public sealed class Game : GameWindow
             return;
         }
 
-        if (_input.IsMouseDown(MouseButton.Left))
+        if (_input.IsMouseDown(MouseButton.Left) || _autoDig)
         {
             _interactionCooldown = InteractionCooldown;
 
             if (hit.Block != BlockType.Bedrock)
             {
+                _particles.SpawnBlockBreak(hit.Block, hit.X, hit.Y, hit.Z);
                 _world.SetBlock(hit.X, hit.Y, hit.Z, BlockType.Air);
             }
         }
@@ -467,7 +490,11 @@ public sealed class Game : GameWindow
         GL.Viewport(0, 0, width, height);
         GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
 
-        Vector3 eye = _player.EyePosition;
+        // The render camera picks up the head sway; aiming and physics keep using the plain eye position.
+        Vector3 eye = _player.EyePosition
+            + (_player.RightFlat * _player.BobHorizontalOffset)
+            + (Vector3.UnitY * _player.BobVerticalOffset);
+
         Vector3 sunDirection = ComputeSunDirection(out Vector3 skyTop, out Vector3 skyHorizon, out Vector3 sunColor, out float ambient);
 
         float aspect = width / (float)height;
@@ -480,6 +507,13 @@ public sealed class Game : GameWindow
             farPlane);
 
         Matrix4 view = Matrix4.LookAt(eye, eye + _player.LookDirection, Vector3.UnitY);
+
+        // Roll the camera around its own view axis; in OpenTK's convention the rotation is
+        // post-multiplied so it happens in view space.
+        if (MathF.Abs(_player.BobRoll) > 0.0005f)
+        {
+            view *= Matrix4.CreateRotationZ(MathHelper.DegreesToRadians(_player.BobRoll));
+        }
 
         // OpenTK matrices are the transpose of their GLSL counterparts, so combining them in
         // OpenTK order (view * projection) yields exactly what the shader needs once uploaded.
@@ -501,6 +535,21 @@ public sealed class Game : GameWindow
             _wireframe,
             drawTransparentPass: true,
             drawOpaquePass: true);
+
+        if (_particles.ActiveCount > 0)
+        {
+            // Billboard axes; fall back to world Z when looking straight up or down so the
+            // cross products never collapse.
+            Vector3 billboardUp = MathF.Abs(_player.LookDirection.Y) > 0.999f ? Vector3.UnitZ : Vector3.UnitY;
+            Vector3 cameraRight = Vector3.Normalize(Vector3.Cross(_player.LookDirection, billboardUp));
+            Vector3 cameraUp = Vector3.Normalize(Vector3.Cross(cameraRight, _player.LookDirection));
+
+            GL.Enable(EnableCap.Blend);
+            GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+            _worldRenderer.Atlas.Bind(TextureUnit.Texture0);
+            _particles.Render(viewProjection, cameraRight, cameraUp, eye, skyHorizon, fogStart, fogEnd);
+            GL.Disable(EnableCap.Blend);
+        }
 
         RaycastHit hit = VoxelRaycast.Cast(_world, eye, _player.LookDirection, ReachDistance);
         if (hit.Hit)
@@ -601,7 +650,8 @@ public sealed class Game : GameWindow
         _debugLines.Add($"CHUNKS  {_world.LoadedChunkCount} LOADED  {_world.PendingWorkCount} PENDING");
         _debugLines.Add($"MESH  {_worldRenderer.DrawnChunks} CHUNKS  {_worldRenderer.DrawnTriangles} TRIS");
         _debugLines.Add($"TIME  {hours:00}:{minutes:00}   FLY {(_player.Flying ? "ON" : "OFF")}   GROUND {(_player.OnGround ? "YES" : "NO")}   WATER {(_player.InWater ? "YES" : "NO")}");
-        _debugLines.Add("WASD MOVE   SPACE JUMP   CTRL SPRINT   SHIFT SNEAK   F FLY   G WIRE");
+        _debugLines.Add($"BOB  {(_viewBobbing ? "ON" : "OFF")}  SWAY {_player.BobStrength:0.00}  ROLL {_player.BobRoll:+0.00;-0.00;0.00}   PARTICLES {_particles.ActiveCount}");
+        _debugLines.Add("WASD MOVE   SPACE JUMP   CTRL SPRINT   SHIFT SNEAK   F FLY   G WIRE   B BOB");
         _debugLines.Add("LMB BREAK   RMB PLACE   MMB PICK   1-9 / WHEEL SELECT   +/- VIEW");
         _debugLines.Add("F3 DEBUG   T TIME   F11 FULLSCREEN   ESC RELEASE MOUSE");
 

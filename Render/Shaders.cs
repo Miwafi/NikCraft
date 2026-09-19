@@ -59,6 +59,58 @@ void main()
 }
 ";
 
+    public const string ParticleVertex = @"#version 330 core
+layout (location = 0) in vec3 aPosition;
+layout (location = 1) in vec2 aUv;
+layout (location = 2) in vec4 aColor;
+
+uniform mat4 uViewProjection;
+
+out vec2 vUv;
+out vec4 vColor;
+out float vViewDepth;
+
+void main()
+{
+    vec4 clip = uViewProjection * vec4(aPosition, 1.0);
+
+    gl_Position = clip;
+    vUv = aUv;
+    vColor = aColor;
+    vViewDepth = clip.w;
+}
+";
+
+    public const string ParticleFragment = @"#version 330 core
+in vec2 vUv;
+in vec4 vColor;
+in float vViewDepth;
+
+uniform sampler2D uAtlas;
+uniform vec3 uFogColor;
+uniform float uFogStart;
+uniform float uFogEnd;
+
+out vec4 FragColor;
+
+void main()
+{
+    vec4 texel = texture(uAtlas, vUv);
+
+    if (texel.a < 0.35)
+    {
+        discard;
+    }
+
+    vec3 color = texel.rgb * vColor.rgb;
+
+    float fogFactor = clamp((vViewDepth - uFogStart) / max(uFogEnd - uFogStart, 0.001), 0.0, 1.0);
+    color = mix(color, uFogColor, fogFactor);
+
+    FragColor = vec4(color, texel.a * vColor.a);
+}
+";
+
     public const string SkyVertex = @"#version 330 core
 layout (location = 0) in vec2 aPosition;
 

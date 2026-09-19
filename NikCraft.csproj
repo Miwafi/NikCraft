@@ -13,7 +13,7 @@
     <InvariantGlobalization>true</InvariantGlobalization>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <ApplicationIcon />
-    <Version>1.0.0</Version>
+    <Version>1.1.0</Version>
     <Product>NikCraft</Product>
     <Description>nc</Description>
   </PropertyGroup>

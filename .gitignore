@@ -1,1 +1,8 @@
+# 构建产物
 bin/
+obj/
+
+# 运行时产物
+*.log
+crash.log
+nikcraft.log

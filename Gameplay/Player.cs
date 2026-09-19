@@ -46,6 +46,59 @@ public sealed class Player
     public Vector3 ForwardFlat { get; private set; } = -Vector3.UnitZ;
     public Vector3 RightFlat { get; private set; } = Vector3.UnitX;
 
+    // ---- view bobbing ----------------------------------------------------
+    // A walking player's head sways up/down and left/right; these offsets are applied to the
+    // render camera only, so aiming and physics keep using the untouched EyePosition.
+
+    /// <summary>Advances with travelled distance, not with time, so the sway matches the stride.</summary>
+    public float BobPhase { get; private set; }
+
+    /// <summary>Smoothed 0..1 intensity, fades in and out so the camera never snaps.</summary>
+    public float BobStrength { get; private set; }
+
+    public float BobVerticalOffset { get; private set; }
+    public float BobHorizontalOffset { get; private set; }
+
+    /// <summary>Camera roll in degrees, a few tenths of a degree either way.</summary>
+    public float BobRoll { get; private set; }
+
+    public void UpdateViewBobbing(bool enabled, float deltaTime)
+    {
+        float horizontalSpeed = new Vector2(Velocity.X, Velocity.Z).Length;
+
+        // Only a grounded, actually moving player bobs. Sprinting sways a bit harder.
+        bool walking = enabled && !Flying && OnGround && horizontalSpeed > 0.6f && !InWater;
+
+        float target = walking
+            ? Math.Clamp(horizontalSpeed / WalkSpeed, 0f, 1.35f)
+            : 0f;
+
+        BobStrength = MathHelper.Lerp(BobStrength, target, Math.Clamp(deltaTime * 8f, 0f, 1f));
+
+        if (BobStrength < 0.001f)
+        {
+            BobStrength = 0f;
+            BobPhase = 0f;
+            BobVerticalOffset = 0f;
+            BobHorizontalOffset = 0f;
+            BobRoll = 0f;
+            return;
+        }
+
+        // Half a stride per sine cycle looks natural: one dip per footfall.
+        BobPhase += horizontalSpeed * deltaTime * 2.4f;
+        if (BobPhase > MathHelper.TwoPi)
+        {
+            BobPhase -= MathHelper.TwoPi;
+        }
+
+        float amplitude = 0.062f * BobStrength;
+
+        BobVerticalOffset = -MathF.Abs(MathF.Sin(BobPhase)) * amplitude;
+        BobHorizontalOffset = MathF.Cos(BobPhase) * amplitude * 0.55f;
+        BobRoll = MathF.Sin(BobPhase) * 0.85f * BobStrength;
+    }
+
     public void UpdateLook()
     {
         float yawRad = MathHelper.DegreesToRadians(Yaw);

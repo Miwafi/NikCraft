@@ -24,12 +24,22 @@ internal static class Program
     private static void Run()
     {
         int autoScreenshotFrame = -1;
+        bool autoWalk = false;
+        bool autoDig = false;
         string[] arguments = Environment.GetCommandLineArgs();
-        for (int i = 1; i < arguments.Length - 1; i++)
+        for (int i = 1; i < arguments.Length; i++)
         {
-            if (arguments[i] == "--shot" && int.TryParse(arguments[i + 1], out int frame))
+            if (arguments[i] == "--shot" && i + 1 < arguments.Length && int.TryParse(arguments[i + 1], out int frame))
             {
                 autoScreenshotFrame = frame;
+            }
+            else if (arguments[i] == "--walk")
+            {
+                autoWalk = true;
+            }
+            else if (arguments[i] == "--dig")
+            {
+                autoDig = true;
             }
         }
 
@@ -50,7 +60,7 @@ internal static class Program
             UpdateFrequency = 0.0,
         };
 
-        using var game = new Game(gameSettings, nativeSettings, autoScreenshotFrame);
+        using var game = new Game(gameSettings, nativeSettings, autoScreenshotFrame, autoWalk, autoDig);
         game.Run();
     }
 
